@@ -26,6 +26,7 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <ArduinoJson.h>
+#include <driver/gpio.h>
 
 // Pin definitions (from README)
 #define ONE_WIRE_PIN   32
@@ -148,16 +149,65 @@ void handleApiSerial();
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("\n=== AxleWatch Transmitter ===");
+
+  // Check if waking from deep sleep
+  esp_sleep_wakeup_cause_t wakeReason = esp_sleep_get_wakeup_cause();
+  bool fromDeepSleep = (wakeReason == ESP_SLEEP_WAKEUP_TIMER);
+
+  if (fromDeepSleep) {
+    Serial.println("\n=== AxleWatch TX (wake from sleep) ===");
+  } else {
+    Serial.println("\n=== AxleWatch Transmitter ===");
+  }
 
   // Initialize pins
   pinMode(BUTTON_PIN, INPUT_PULLUP);
+  // Explicitly enable pull-up for GPIO25 (DAC pin has weak internal pull-up)
+  gpio_pullup_en((gpio_num_t)BUTTON_PIN);
+  gpio_pulldown_dis((gpio_num_t)BUTTON_PIN);
+
   pinMode(LED_RED_PIN, OUTPUT);
   pinMode(LED_GREEN_PIN, OUTPUT);
   pinMode(BUZZER_PIN, OUTPUT);
 
   digitalWrite(LED_RED_PIN, LOW);
   digitalWrite(LED_GREEN_PIN, LOW);
+
+  // Check button IMMEDIATELY after pin init, before any radio initialization
+  // (LoRa and WiFi can interfere with GPIO25 which is an ADC2 pin)
+  bool enterSetup = false;
+  if (!fromDeepSleep) {
+    delay(100);  // Brief stabilization after pin config
+
+    int pressedCount = 0;
+    for (int i = 0; i < 10; i++) {
+      if (digitalRead(BUTTON_PIN) == LOW) pressedCount++;
+      delay(20);
+    }
+
+    bool buttonPressed = (pressedCount >= 7);
+    Serial.printf("Button check: %d/10 samples LOW - %s\n", pressedCount,
+                  buttonPressed ? "PRESSED" : "not pressed");
+
+    if (buttonPressed) {
+      Serial.println("Hold button for 2 seconds to enter setup mode...");
+      unsigned long holdStart = millis();
+      bool validHold = true;
+
+      while (millis() - holdStart < 2000) {
+        if (digitalRead(BUTTON_PIN) != LOW) {
+          validHold = false;
+          Serial.println("Button released - normal boot");
+          break;
+        }
+        digitalWrite(LED_RED_PIN, (millis() / 200) % 2);
+        delay(50);
+      }
+      digitalWrite(LED_RED_PIN, LOW);
+
+      enterSetup = (validHold && digitalRead(BUTTON_PIN) == LOW);
+    }
+  }
 
   // Initialize EEPROM
   EEPROM.begin(EEPROM_SIZE);
@@ -196,21 +246,20 @@ void setup() {
   // Load transmitter configuration (ID and power mode) from EEPROM
   loadTransmitterConfig();
 
-  // Setup WiFi and Web Server
-  setupWiFi();
-  setupWebServer();
+  // Setup WiFi and Web Server (only on cold boot, not needed for deep sleep wake)
+  if (!fromDeepSleep) {
+    setupWiFi();
+    setupWebServer();
 
-  // Startup feedback
-  playTone(1000, 100);
-  delay(50);
-  playTone(1500, 100);
-  blinkLED(LED_GREEN_PIN, 2, 200);
+    // Startup feedback - only on cold boot
+    playTone(1000, 100);
+    delay(50);
+    playTone(1500, 100);
+    blinkLED(LED_GREEN_PIN, 2, 200);
 
-  // Check if button is held during startup for setup mode
-  if (digitalRead(BUTTON_PIN) == LOW) {
-    delay(100);
-    if (digitalRead(BUTTON_PIN) == LOW) {
-      Serial.println("Button held - entering setup mode");
+    // Enter setup mode if button was held
+    if (enterSetup) {
+      Serial.println("Entering setup mode...");
       enterSetupMode();
     }
   }
@@ -218,7 +267,7 @@ void setup() {
   if (!sensorsConfigured) {
     Serial.println("WARNING: Sensors not configured!");
     blinkLED(LED_RED_PIN, 5, 200);
-  } else {
+  } else if (!fromDeepSleep) {
     Serial.println("System ready - starting normal operation");
     Serial.printf("Transmitter ID: %d, Active sensors: %d, Power save: %s\n",
                   transmitterID, activeSensorCount, powerSaveMode ? "ON" : "OFF");
@@ -226,11 +275,21 @@ void setup() {
     delay(500);
     digitalWrite(LED_GREEN_PIN, LOW);
   }
+
+  // If waking from deep sleep, transmit immediately and go back to sleep
+  if (fromDeepSleep && sensorsConfigured && powerSaveMode) {
+    readAndTransmitData();
+    Serial.println("Returning to deep sleep...");
+    delay(100);
+    enterDeepSleep();
+  }
 }
 
 void loop() {
-  // Handle web server requests
-  server.handleClient();
+  // Handle web server requests (only if WiFi was started)
+  if (!powerSaveMode) {
+    server.handleClient();
+  }
 
   // Check for button press to enter setup mode (3 seconds)
   if (checkButtonPress(BUTTON_SETUP_PRESS_MS)) {
@@ -244,8 +303,8 @@ void loop() {
 
     // If power save mode is enabled, enter deep sleep after transmission
     if (powerSaveMode) {
-      Serial.println("Entering deep sleep for power efficiency...");
-      delay(100); // Let serial finish
+      Serial.println("Entering deep sleep...");
+      delay(100);
       enterDeepSleep();
     }
   }
@@ -619,8 +678,24 @@ void saveSensorConfig() {
   // Write active sensor count
   EEPROM.put(EEPROM_SENSOR_COUNT_ADDR, activeSensorCount);
 
-  EEPROM.commit();
-  Serial.printf("Configuration saved: %d sensors\n", activeSensorCount);
+  // Commit to flash - this is critical!
+  bool success = EEPROM.commit();
+  delay(100); // Give flash time to complete write
+
+  if (success) {
+    Serial.printf("Configuration saved: %d sensors\n", activeSensorCount);
+  } else {
+    Serial.println("ERROR: Failed to save configuration to EEPROM!");
+  }
+
+  // Verify the save by reading back magic number
+  uint16_t verifyMagic;
+  EEPROM.get(EEPROM_MAGIC_ADDR, verifyMagic);
+  if (verifyMagic != EEPROM_MAGIC) {
+    Serial.println("ERROR: EEPROM verification failed!");
+  } else {
+    Serial.println("EEPROM verification OK");
+  }
 }
 
 /**
@@ -631,6 +706,7 @@ void loadSensorConfig() {
 
   uint16_t magic;
   EEPROM.get(EEPROM_MAGIC_ADDR, magic);
+  Serial.printf("EEPROM magic number: 0x%04X (expected: 0x%04X)\n", magic, EEPROM_MAGIC);
 
   if (magic == EEPROM_MAGIC) {
     EEPROM.get(EEPROM_SENSOR_ADDR, sensorConfig);
@@ -779,8 +855,9 @@ void blinkLED(int pin, int times, int delayMs) {
  */
 void saveDeviceName() {
   EEPROM.put(EEPROM_NAME_ADDR, deviceName);
-  EEPROM.commit();
-  Serial.println("Device name saved to EEPROM");
+  bool success = EEPROM.commit();
+  delay(50); // Give flash time to complete write
+  Serial.printf("Device name saved to EEPROM: %s\n", success ? "OK" : "FAILED");
 }
 
 /**
@@ -818,10 +895,11 @@ void loadDeviceName() {
 void saveTransmitterConfig() {
   EEPROM.put(EEPROM_TRANSMITTER_ID_ADDR, transmitterID);
   EEPROM.put(EEPROM_POWER_MODE_ADDR, powerSaveMode);
-  EEPROM.commit();
+  bool success = EEPROM.commit();
+  delay(50); // Give flash time to complete write
 
-  Serial.printf("Transmitter ID %d saved to EEPROM (Power save: %s)\n",
-                transmitterID, powerSaveMode ? "ON" : "OFF");
+  Serial.printf("Transmitter ID %d saved to EEPROM (Power save: %s) - %s\n",
+                transmitterID, powerSaveMode ? "ON" : "OFF", success ? "OK" : "FAILED");
 }
 
 /**
