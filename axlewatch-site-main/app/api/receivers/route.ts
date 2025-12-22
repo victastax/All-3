@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { verifyAuth, addReceiverToUser, removeReceiverFromUser, getUserReceivers } from "@/lib/userStore";
-import { getTelemetry } from "@/lib/telemetryStore";
+import { getTelemetry, getLatestReadingsByTrailer } from "@/lib/telemetryStore";
 
 export const runtime = "nodejs";
 
@@ -27,37 +27,47 @@ export async function GET(req: NextRequest) {
     // Get user's receivers
     const receiverMacs = await getUserReceivers(user.id);
 
-    // Get latest data for each receiver
+    // Get latest data for each receiver, with all trailers grouped and sorted
     const receivers = receiverMacs.map(mac => {
       const telemetry = getTelemetry(mac);
+      const trailerReadings = getLatestReadingsByTrailer(mac);
+
+      // Build trailers array from all unique trailer_ids
+      const trailers = trailerReadings.map((reading, index) => ({
+        id: index + 1,
+        name: reading.trailer_id, // e.g., "TRAILER1", "DOLLY1"
+        online: true,
+        rssi: -50,
+        lastUpdate: new Date(reading.timestamp).getTime() || telemetry?.lastUpdate || Date.now(),
+        ambientTemp: 25, // TODO: Get from reading if available
+        hubTemperatures: [
+          reading.readings.hub_1 || 0,
+          reading.readings.hub_2 || 0,
+          reading.readings.hub_3 || 0,
+          reading.readings.hub_4 || 0,
+          reading.readings.hub_5 || 0,
+          reading.readings.hub_6 || 0,
+          reading.readings.hub_7 || 0,
+          reading.readings.hub_8 || 0,
+        ].filter(t => t > 0),
+        alert: reading.alert || null,
+      }));
+
+      // Use the first trailer's location for the receiver location
+      const firstReading = trailerReadings[0];
+
       return {
         id: mac,
         deviceId: mac,
         name: mac, // For now, use MAC as name
-        latestData: telemetry?.readings[0] ? {
+        latestData: trailerReadings.length > 0 ? {
           id: Date.now().toString(),
-          timestamp: new Date(telemetry.lastUpdate).toISOString(),
-          latitude: telemetry.readings[0].location?.latitude || null,
-          longitude: telemetry.readings[0].location?.longitude || null,
-          speed: telemetry.readings[0].location?.speed || null,
-          satellites: null, // Not in our current telemetry structure
-          trailers: [{
-            id: 1,
-            online: true,
-            rssi: -50,
-            lastUpdate: telemetry.lastUpdate,
-            ambientTemp: 25,
-            hubTemperatures: [
-              telemetry.readings[0].readings.hub_1 || 0,
-              telemetry.readings[0].readings.hub_2 || 0,
-              telemetry.readings[0].readings.hub_3 || 0,
-              telemetry.readings[0].readings.hub_4 || 0,
-              telemetry.readings[0].readings.hub_5 || 0,
-              telemetry.readings[0].readings.hub_6 || 0,
-              telemetry.readings[0].readings.hub_7 || 0,
-              telemetry.readings[0].readings.hub_8 || 0,
-            ].filter(t => t > 0),
-          }],
+          timestamp: new Date(telemetry?.lastUpdate || Date.now()).toISOString(),
+          latitude: firstReading?.location?.latitude || null,
+          longitude: firstReading?.location?.longitude || null,
+          speed: firstReading?.location?.speed || null,
+          satellites: null,
+          trailers: trailers,
         } : null,
         createdAt: new Date().toISOString(),
       };
