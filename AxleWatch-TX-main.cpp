@@ -26,6 +26,7 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <ArduinoJson.h>
+#include <driver/gpio.h>
 
 // Pin definitions (from README)
 #define ONE_WIRE_PIN   32
@@ -161,6 +162,10 @@ void setup() {
 
   // Initialize pins
   pinMode(BUTTON_PIN, INPUT_PULLUP);
+  // Explicitly enable pull-up for GPIO25 (DAC pin has weak internal pull-up)
+  gpio_pullup_en((gpio_num_t)BUTTON_PIN);
+  gpio_pulldown_dis((gpio_num_t)BUTTON_PIN);
+
   pinMode(LED_RED_PIN, OUTPUT);
   pinMode(LED_GREEN_PIN, OUTPUT);
   pinMode(BUZZER_PIN, OUTPUT);
