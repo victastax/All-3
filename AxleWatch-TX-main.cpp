@@ -148,7 +148,16 @@ void handleApiSerial();
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("\n=== AxleWatch Transmitter ===");
+
+  // Check if waking from deep sleep
+  esp_sleep_wakeup_cause_t wakeReason = esp_sleep_get_wakeup_cause();
+  bool fromDeepSleep = (wakeReason == ESP_SLEEP_WAKEUP_TIMER);
+
+  if (fromDeepSleep) {
+    Serial.println("\n=== AxleWatch TX (wake from sleep) ===");
+  } else {
+    Serial.println("\n=== AxleWatch Transmitter ===");
+  }
 
   // Initialize pins
   pinMode(BUTTON_PIN, INPUT_PULLUP);
@@ -196,60 +205,58 @@ void setup() {
   // Load transmitter configuration (ID and power mode) from EEPROM
   loadTransmitterConfig();
 
-  // Setup WiFi and Web Server
-  setupWiFi();
-  setupWebServer();
+  // Setup WiFi and Web Server (only on cold boot, not needed for deep sleep wake)
+  if (!fromDeepSleep) {
+    setupWiFi();
+    setupWebServer();
 
-  // Startup feedback
-  playTone(1000, 100);
-  delay(50);
-  playTone(1500, 100);
-  blinkLED(LED_GREEN_PIN, 2, 200);
+    // Startup feedback - only on cold boot
+    playTone(1000, 100);
+    delay(50);
+    playTone(1500, 100);
+    blinkLED(LED_GREEN_PIN, 2, 200);
 
-  // Allow button pin to stabilize after all initialization
-  delay(500);
+    // Check if button is held during startup for setup mode
+    // Only check on cold boot, not when waking from deep sleep
+    delay(500);  // Allow button pin to stabilize
 
-  // Check if button is held during startup for setup mode
-  // Take multiple samples to filter out noise from weak internal pull-up
-  int pressedCount = 0;
-  for (int i = 0; i < 10; i++) {
-    if (digitalRead(BUTTON_PIN) == LOW) pressedCount++;
-    delay(20);
-  }
-
-  // Only consider button pressed if majority of samples show pressed
-  bool buttonPressed = (pressedCount >= 7);
-  Serial.printf("Button check: %d/10 samples LOW - %s\n", pressedCount,
-                buttonPressed ? "PRESSED" : "not pressed");
-
-  if (buttonPressed) {
-    Serial.println("Hold button for 2 seconds to enter setup mode...");
-    unsigned long holdStart = millis();
-    bool validHold = true;
-
-    // Check button continuously for 2 seconds
-    while (millis() - holdStart < 2000) {
-      if (digitalRead(BUTTON_PIN) != LOW) {
-        validHold = false;
-        Serial.println("Button released - normal boot");
-        break;
-      }
-      // Blink red LED to show we're detecting the hold
-      digitalWrite(LED_RED_PIN, (millis() / 200) % 2);
-      delay(50);
+    int pressedCount = 0;
+    for (int i = 0; i < 10; i++) {
+      if (digitalRead(BUTTON_PIN) == LOW) pressedCount++;
+      delay(20);
     }
-    digitalWrite(LED_RED_PIN, LOW);
 
-    if (validHold && digitalRead(BUTTON_PIN) == LOW) {
-      Serial.println("Button held for 2 seconds - entering setup mode");
-      enterSetupMode();
+    bool buttonPressed = (pressedCount >= 7);
+    Serial.printf("Button check: %d/10 samples LOW - %s\n", pressedCount,
+                  buttonPressed ? "PRESSED" : "not pressed");
+
+    if (buttonPressed) {
+      Serial.println("Hold button for 2 seconds to enter setup mode...");
+      unsigned long holdStart = millis();
+      bool validHold = true;
+
+      while (millis() - holdStart < 2000) {
+        if (digitalRead(BUTTON_PIN) != LOW) {
+          validHold = false;
+          Serial.println("Button released - normal boot");
+          break;
+        }
+        digitalWrite(LED_RED_PIN, (millis() / 200) % 2);
+        delay(50);
+      }
+      digitalWrite(LED_RED_PIN, LOW);
+
+      if (validHold && digitalRead(BUTTON_PIN) == LOW) {
+        Serial.println("Button held for 2 seconds - entering setup mode");
+        enterSetupMode();
+      }
     }
   }
 
   if (!sensorsConfigured) {
     Serial.println("WARNING: Sensors not configured!");
     blinkLED(LED_RED_PIN, 5, 200);
-  } else {
+  } else if (!fromDeepSleep) {
     Serial.println("System ready - starting normal operation");
     Serial.printf("Transmitter ID: %d, Active sensors: %d, Power save: %s\n",
                   transmitterID, activeSensorCount, powerSaveMode ? "ON" : "OFF");
@@ -257,11 +264,21 @@ void setup() {
     delay(500);
     digitalWrite(LED_GREEN_PIN, LOW);
   }
+
+  // If waking from deep sleep, transmit immediately and go back to sleep
+  if (fromDeepSleep && sensorsConfigured && powerSaveMode) {
+    readAndTransmitData();
+    Serial.println("Returning to deep sleep...");
+    delay(100);
+    enterDeepSleep();
+  }
 }
 
 void loop() {
-  // Handle web server requests
-  server.handleClient();
+  // Handle web server requests (only if WiFi was started)
+  if (!powerSaveMode) {
+    server.handleClient();
+  }
 
   // Check for button press to enter setup mode (3 seconds)
   if (checkButtonPress(BUTTON_SETUP_PRESS_MS)) {
@@ -275,8 +292,8 @@ void loop() {
 
     // If power save mode is enabled, enter deep sleep after transmission
     if (powerSaveMode) {
-      Serial.println("Entering deep sleep for power efficiency...");
-      delay(100); // Let serial finish
+      Serial.println("Entering deep sleep...");
+      delay(100);
       enterDeepSleep();
     }
   }
