@@ -210,11 +210,20 @@ void setup() {
   delay(500);
 
   // Check if button is held during startup for setup mode
-  // Requires 2 seconds of continuous hold to avoid false triggers
-  Serial.printf("Button state at startup: %s\n", digitalRead(BUTTON_PIN) == LOW ? "PRESSED" : "RELEASED");
+  // Take multiple samples to filter out noise from weak internal pull-up
+  int pressedCount = 0;
+  for (int i = 0; i < 10; i++) {
+    if (digitalRead(BUTTON_PIN) == LOW) pressedCount++;
+    delay(20);
+  }
 
-  if (digitalRead(BUTTON_PIN) == LOW) {
-    Serial.println("Button detected - hold for 2 seconds to enter setup mode...");
+  // Only consider button pressed if majority of samples show pressed
+  bool buttonPressed = (pressedCount >= 7);
+  Serial.printf("Button check: %d/10 samples LOW - %s\n", pressedCount,
+                buttonPressed ? "PRESSED" : "not pressed");
+
+  if (buttonPressed) {
+    Serial.println("Hold button for 2 seconds to enter setup mode...");
     unsigned long holdStart = millis();
     bool validHold = true;
 
