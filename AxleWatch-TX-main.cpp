@@ -173,6 +173,42 @@ void setup() {
   digitalWrite(LED_RED_PIN, LOW);
   digitalWrite(LED_GREEN_PIN, LOW);
 
+  // Check button IMMEDIATELY after pin init, before any radio initialization
+  // (LoRa and WiFi can interfere with GPIO25 which is an ADC2 pin)
+  bool enterSetup = false;
+  if (!fromDeepSleep) {
+    delay(100);  // Brief stabilization after pin config
+
+    int pressedCount = 0;
+    for (int i = 0; i < 10; i++) {
+      if (digitalRead(BUTTON_PIN) == LOW) pressedCount++;
+      delay(20);
+    }
+
+    bool buttonPressed = (pressedCount >= 7);
+    Serial.printf("Button check: %d/10 samples LOW - %s\n", pressedCount,
+                  buttonPressed ? "PRESSED" : "not pressed");
+
+    if (buttonPressed) {
+      Serial.println("Hold button for 2 seconds to enter setup mode...");
+      unsigned long holdStart = millis();
+      bool validHold = true;
+
+      while (millis() - holdStart < 2000) {
+        if (digitalRead(BUTTON_PIN) != LOW) {
+          validHold = false;
+          Serial.println("Button released - normal boot");
+          break;
+        }
+        digitalWrite(LED_RED_PIN, (millis() / 200) % 2);
+        delay(50);
+      }
+      digitalWrite(LED_RED_PIN, LOW);
+
+      enterSetup = (validHold && digitalRead(BUTTON_PIN) == LOW);
+    }
+  }
+
   // Initialize EEPROM
   EEPROM.begin(EEPROM_SIZE);
 
@@ -221,40 +257,10 @@ void setup() {
     playTone(1500, 100);
     blinkLED(LED_GREEN_PIN, 2, 200);
 
-    // Check if button is held during startup for setup mode
-    // Only check on cold boot, not when waking from deep sleep
-    delay(500);  // Allow button pin to stabilize
-
-    int pressedCount = 0;
-    for (int i = 0; i < 10; i++) {
-      if (digitalRead(BUTTON_PIN) == LOW) pressedCount++;
-      delay(20);
-    }
-
-    bool buttonPressed = (pressedCount >= 7);
-    Serial.printf("Button check: %d/10 samples LOW - %s\n", pressedCount,
-                  buttonPressed ? "PRESSED" : "not pressed");
-
-    if (buttonPressed) {
-      Serial.println("Hold button for 2 seconds to enter setup mode...");
-      unsigned long holdStart = millis();
-      bool validHold = true;
-
-      while (millis() - holdStart < 2000) {
-        if (digitalRead(BUTTON_PIN) != LOW) {
-          validHold = false;
-          Serial.println("Button released - normal boot");
-          break;
-        }
-        digitalWrite(LED_RED_PIN, (millis() / 200) % 2);
-        delay(50);
-      }
-      digitalWrite(LED_RED_PIN, LOW);
-
-      if (validHold && digitalRead(BUTTON_PIN) == LOW) {
-        Serial.println("Button held for 2 seconds - entering setup mode");
-        enterSetupMode();
-      }
+    // Enter setup mode if button was held
+    if (enterSetup) {
+      Serial.println("Entering setup mode...");
+      enterSetupMode();
     }
   }
 
