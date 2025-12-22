@@ -619,8 +619,24 @@ void saveSensorConfig() {
   // Write active sensor count
   EEPROM.put(EEPROM_SENSOR_COUNT_ADDR, activeSensorCount);
 
-  EEPROM.commit();
-  Serial.printf("Configuration saved: %d sensors\n", activeSensorCount);
+  // Commit to flash - this is critical!
+  bool success = EEPROM.commit();
+  delay(100); // Give flash time to complete write
+
+  if (success) {
+    Serial.printf("Configuration saved: %d sensors\n", activeSensorCount);
+  } else {
+    Serial.println("ERROR: Failed to save configuration to EEPROM!");
+  }
+
+  // Verify the save by reading back magic number
+  uint16_t verifyMagic;
+  EEPROM.get(EEPROM_MAGIC_ADDR, verifyMagic);
+  if (verifyMagic != EEPROM_MAGIC) {
+    Serial.println("ERROR: EEPROM verification failed!");
+  } else {
+    Serial.println("EEPROM verification OK");
+  }
 }
 
 /**
@@ -631,6 +647,7 @@ void loadSensorConfig() {
 
   uint16_t magic;
   EEPROM.get(EEPROM_MAGIC_ADDR, magic);
+  Serial.printf("EEPROM magic number: 0x%04X (expected: 0x%04X)\n", magic, EEPROM_MAGIC);
 
   if (magic == EEPROM_MAGIC) {
     EEPROM.get(EEPROM_SENSOR_ADDR, sensorConfig);
@@ -779,8 +796,9 @@ void blinkLED(int pin, int times, int delayMs) {
  */
 void saveDeviceName() {
   EEPROM.put(EEPROM_NAME_ADDR, deviceName);
-  EEPROM.commit();
-  Serial.println("Device name saved to EEPROM");
+  bool success = EEPROM.commit();
+  delay(50); // Give flash time to complete write
+  Serial.printf("Device name saved to EEPROM: %s\n", success ? "OK" : "FAILED");
 }
 
 /**
@@ -818,10 +836,11 @@ void loadDeviceName() {
 void saveTransmitterConfig() {
   EEPROM.put(EEPROM_TRANSMITTER_ID_ADDR, transmitterID);
   EEPROM.put(EEPROM_POWER_MODE_ADDR, powerSaveMode);
-  EEPROM.commit();
+  bool success = EEPROM.commit();
+  delay(50); // Give flash time to complete write
 
-  Serial.printf("Transmitter ID %d saved to EEPROM (Power save: %s)\n",
-                transmitterID, powerSaveMode ? "ON" : "OFF");
+  Serial.printf("Transmitter ID %d saved to EEPROM (Power save: %s) - %s\n",
+                transmitterID, powerSaveMode ? "ON" : "OFF", success ? "OK" : "FAILED");
 }
 
 /**
