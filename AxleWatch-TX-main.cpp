@@ -175,6 +175,7 @@ void setup() {
   LoRa.setTxPower(LORA_TX_POWER);
   LoRa.setSignalBandwidth(LORA_BANDWIDTH);
   LoRa.setSpreadingFactor(LORA_SPREADING_FACTOR);
+  LoRa.disableCrc(); // Explicitly disable CRC to match RX configuration
   Serial.println("LoRa initialized successfully");
   Serial.printf("LoRa Config: 433MHz, SF%d, BW125kHz\n", LORA_SPREADING_FACTOR);
 

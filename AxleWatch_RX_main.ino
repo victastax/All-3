@@ -1194,7 +1194,8 @@ public:
       // Trailer ID
       doc["trailer_id"] = transmitters[i].txID;
 
-      // Hub temperature readings (hub_1 through hub_6)
+      // Hub temperature readings (hub_1 through hub_8)
+      // TX supports 9 sensors, web dashboard displays 8 hubs
       JsonObject readings = doc.createNestedObject("readings");
       readings["hub_1"] = transmitters[i].temps[0];
       readings["hub_2"] = transmitters[i].temps[1];
@@ -1202,6 +1203,8 @@ public:
       readings["hub_4"] = transmitters[i].temps[3];
       readings["hub_5"] = transmitters[i].temps[4];
       readings["hub_6"] = transmitters[i].temps[5];
+      readings["hub_7"] = transmitters[i].temps[6];
+      readings["hub_8"] = transmitters[i].temps[7];
 
       // Location data (from GPS)
       JsonObject location = doc.createNestedObject("location");
@@ -1209,21 +1212,31 @@ public:
       location["longitude"] = gpsData->longitude;
       location["speed"] = gpsData->speedKmh;
 
-      // Alert (if any hub temperature is high)
+      // Alert (if any hub temperature delta exceeds threshold)
+      // Compare delta (temp - ambient) to thresholds, not absolute temperature
+      float ambient = transmitters[i].ambientTemp;
+      float maxDelta = 0;
       float maxTemp = 0;
-      for (int j = 0; j < 6; j++) {
-        if (transmitters[i].temps[j] > maxTemp) maxTemp = transmitters[i].temps[j];
+      for (int j = 0; j < 8; j++) {
+        float temp = transmitters[i].temps[j];
+        if (temp > 1.0) { // Ignore unused sensors (0.0)
+          float delta = temp - ambient;
+          if (delta > maxDelta) {
+            maxDelta = delta;
+            maxTemp = temp;
+          }
+        }
       }
 
-      if (maxTemp > configMgr->config.warnOffset) {
+      if (maxDelta > configMgr->config.warnOffset) {
         JsonObject alert = doc.createNestedObject("alert");
-        if (maxTemp > configMgr->config.critOffset) {
+        if (maxDelta > configMgr->config.critOffset) {
           alert["level"] = "critical";
         } else {
           alert["level"] = "warning";
         }
         char msg[100];
-        snprintf(msg, sizeof(msg), "High temperature detected: %.1f°C", maxTemp);
+        snprintf(msg, sizeof(msg), "High temperature detected: %.1f°C (%.1f°C above ambient)", maxTemp, maxDelta);
         alert["message"] = msg;
       }
 
