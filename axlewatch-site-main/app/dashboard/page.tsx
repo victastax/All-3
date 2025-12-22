@@ -49,6 +49,7 @@ export default function DashboardPage() {
   const [receivers, setReceivers] = useState<Receiver[]>([]);
   const [selectedReceiver, setSelectedReceiver] = useState<Receiver | null>(null);
   const [loading, setLoading] = useState(true);
+  const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
 
   useEffect(() => {
     // Check authentication
@@ -59,8 +60,8 @@ export default function DashboardPage() {
     }
 
     loadReceivers();
-    // Refresh data every 5 seconds for a more "live" feel
-    const interval = setInterval(loadReceivers, 5000);
+    // Refresh data every 2 seconds for real-time feel
+    const interval = setInterval(loadReceivers, 2000);
     return () => clearInterval(interval);
   }, [router]);
 
@@ -83,6 +84,7 @@ export default function DashboardPage() {
 
       const data = await res.json();
       setReceivers(data.receivers);
+      setLastUpdate(new Date());
 
       // Auto-select first receiver if none selected
       if (!selectedReceiver && data.receivers.length > 0) {
@@ -180,11 +182,20 @@ export default function DashboardPage() {
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold mb-2">Fleet Dashboard</h1>
-        <p className="text-neutral-600">
-          Monitor your fleet in real-time with live temperature and GPS data
-        </p>
+      <div className="mb-8 flex justify-between items-start">
+        <div>
+          <h1 className="text-3xl font-bold mb-2">Fleet Dashboard</h1>
+          <p className="text-neutral-600">
+            Monitor your fleet in real-time with live temperature and GPS data
+          </p>
+        </div>
+        <div className="text-right text-sm text-neutral-500">
+          <div className="flex items-center gap-2">
+            <span className="inline-block w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+            Live
+          </div>
+          <div>Updated: {lastUpdate.toLocaleTimeString()}</div>
+        </div>
       </div>
 
       <div className="grid lg:grid-cols-4 gap-6 mb-6">
