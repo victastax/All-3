@@ -206,11 +206,33 @@ void setup() {
   playTone(1500, 100);
   blinkLED(LED_GREEN_PIN, 2, 200);
 
+  // Allow button pin to stabilize after all initialization
+  delay(500);
+
   // Check if button is held during startup for setup mode
+  // Requires 2 seconds of continuous hold to avoid false triggers
+  Serial.printf("Button state at startup: %s\n", digitalRead(BUTTON_PIN) == LOW ? "PRESSED" : "RELEASED");
+
   if (digitalRead(BUTTON_PIN) == LOW) {
-    delay(100);
-    if (digitalRead(BUTTON_PIN) == LOW) {
-      Serial.println("Button held - entering setup mode");
+    Serial.println("Button detected - hold for 2 seconds to enter setup mode...");
+    unsigned long holdStart = millis();
+    bool validHold = true;
+
+    // Check button continuously for 2 seconds
+    while (millis() - holdStart < 2000) {
+      if (digitalRead(BUTTON_PIN) != LOW) {
+        validHold = false;
+        Serial.println("Button released - normal boot");
+        break;
+      }
+      // Blink red LED to show we're detecting the hold
+      digitalWrite(LED_RED_PIN, (millis() / 200) % 2);
+      delay(50);
+    }
+    digitalWrite(LED_RED_PIN, LOW);
+
+    if (validHold && digitalRead(BUTTON_PIN) == LOW) {
+      Serial.println("Button held for 2 seconds - entering setup mode");
       enterSetupMode();
     }
   }
