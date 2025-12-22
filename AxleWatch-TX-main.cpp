@@ -24,7 +24,7 @@
 #include <LoRa.h>
 #include <EEPROM.h>
 #include <WiFi.h>
-#include <ESPAsyncWebServer.h>
+#include <WebServer.h>
 #include <ArduinoJson.h>
 
 // Pin definitions (from README)
@@ -88,7 +88,7 @@ uint16_t transmitterID = 1;     // User-configurable transmitter ID (0-65535)
 bool powerSaveMode = false;     // Enable deep sleep for power efficiency
 
 // WiFi and Web Server
-AsyncWebServer server(80);
+WebServer server(80);
 char deviceName[MAX_DEVICE_NAME_LENGTH] = "AxleWatch-TX";
 
 // Serial monitor circular buffer
@@ -137,6 +137,14 @@ void loadTransmitterConfig();
 void logToSerial(const String& message);
 String getSerialLogs();
 void enterDeepSleep();
+
+// Web server handlers
+void handleRoot();
+void handleApiConfigGet();
+void handleApiConfigPost();
+void handleApiData();
+void handleApiLora();
+void handleApiSerial();
 
 void setup() {
   Serial.begin(115200);
@@ -221,6 +229,9 @@ void setup() {
 }
 
 void loop() {
+  // Handle web server requests
+  server.handleClient();
+
   // Check for button press to enter setup mode (3 seconds)
   if (checkButtonPress(BUTTON_SETUP_PRESS_MS)) {
     enterSetupMode();
@@ -250,7 +261,7 @@ void loop() {
     }
   }
 
-  delay(100);
+  delay(10); // Small delay for web server responsiveness
 }
 
 /**
@@ -919,15 +930,10 @@ void setupWiFi() {
 }
 
 /**
- * Setup Web Server with all endpoints
- * UI STYLE MATCHES RX WEBSERVER (dark theme #0b1220)
+ * Handle root page request
  */
-void setupWebServer() {
-  Serial.println("Setting up web server...");
-
-  // Serve the main web interface - DARK THEME MATCHING RX
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-    String html = R"rawliteral(
+void handleRoot() {
+  String html = R"rawliteral(
 <!doctype html><html><head>
 <meta charset='utf-8'>
 <meta name='viewport' content='width=device-width,initial-scale=1'/>
@@ -941,7 +947,7 @@ h1{font-size:20px;margin:0 0 16px}
 fieldset{border:1px solid #334;padding:12px;margin:12px 0;border-radius:8px}
 legend{color:#4cc9f0;font-weight:600;padding:0 8px}
 label{display:block;margin:12px 0 4px;font-weight:500}
-input,select{width:100%;padding:10px;border-radius:6px;border:1px solid #334;background:#0b1220;color:#e8eefc;font-size:14px}
+input,select{width:100%;padding:10px;border-radius:6px;border:1px solid #334;background:#0b1220;color:#e8eefc;font-size:14px;box-sizing:border-box}
 input:focus,select:focus{outline:none;border-color:#4cc9f0}
 button{padding:12px 20px;border:0;border-radius:8px;background:#4cc9f0;color:#0b1220;font-weight:700;margin-top:12px;width:100%;cursor:pointer;font-size:15px}
 button:hover{background:#3ab8df}
@@ -956,12 +962,12 @@ button:hover{background:#3ab8df}
 #serialLog{background:#000;color:#0f0;padding:12px;border-radius:8px;height:300px;overflow-y:auto;font-family:'Courier New',monospace;font-size:12px;line-height:1.4;border:1px solid #334}
 .log-entry{margin-bottom:4px}
 .timestamp{color:#666;margin-right:8px}
-.success-msg{background:#1a3d2a;border:1px solid:#7bd88f;color:#7bd88f;padding:12px;border-radius:8px;margin-top:12px;display:none}
+.success-msg{background:#1a3d2a;border:1px solid #7bd88f;color:#7bd88f;padding:12px;border-radius:8px;margin-top:12px;display:none}
 a{color:#4cc9f0;text-decoration:none}
 a:hover{text-decoration:underline}
 </style>
 </head><body>
-<h1>AxleWatch Transmitter – Configuration</h1>
+<h1>AxleWatch Transmitter - Configuration</h1>
 <p class='muted'>AP: )rawliteral" + WiFi.softAPIP().toString() + R"rawliteral( | SSID: AxleWatch-TX</p>
 
 <div class='card'>
@@ -1060,14 +1066,14 @@ function updateData(){
     .then(data=>{
       if(data.valid){
         document.getElementById('sensorCount').textContent=data.count;
-        document.getElementById('temp0').textContent=data.temps[0].toFixed(1)+'°C';
+        document.getElementById('temp0').textContent=data.temps[0].toFixed(1)+'C';
 
         const grid=document.getElementById('sensorGrid');
         grid.innerHTML='';
         for(let i=1;i<data.count;i++){
           const box=document.createElement('div');
           box.className='sensor-box';
-          box.innerHTML='<h3>Position '+i+'</h3><div class="temp">'+data.temps[i].toFixed(1)+'°C</div>';
+          box.innerHTML='<h3>Position '+i+'</h3><div class="temp">'+data.temps[i].toFixed(1)+'C</div>';
           grid.appendChild(box);
         }
 
@@ -1120,96 +1126,125 @@ refreshAll();
 </script>
 </body></html>
 )rawliteral";
-    request->send(200, "text/html", html);
-  });
+  server.send(200, "text/html", html);
+}
 
-  // API: Get full configuration (name + transmitter ID + power mode)
-  server.on("/api/config", HTTP_GET, [](AsyncWebServerRequest *request){
+/**
+ * Handle GET /api/config
+ */
+void handleApiConfigGet() {
+  StaticJsonDocument<128> doc;
+  doc["name"] = deviceName;
+  doc["transmitterID"] = transmitterID;
+  doc["powerSaveMode"] = powerSaveMode;
+  String response;
+  serializeJson(doc, response);
+  server.send(200, "application/json", response);
+}
+
+/**
+ * Handle POST /api/config
+ */
+void handleApiConfigPost() {
+  if (server.hasArg("plain")) {
+    String body = server.arg("plain");
     StaticJsonDocument<128> doc;
-    doc["name"] = deviceName;
-    doc["transmitterID"] = transmitterID;
-    doc["powerSaveMode"] = powerSaveMode;
-    String response;
-    serializeJson(doc, response);
-    request->send(200, "application/json", response);
-  });
+    DeserializationError error = deserializeJson(doc, body);
 
-  // API: Set configuration (name + transmitter ID + power mode)
-  server.on("/api/config", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
-    [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
-      StaticJsonDocument<128> doc;
-      DeserializationError error = deserializeJson(doc, data);
-
-      if (!error) {
-        if (doc.containsKey("name")) {
-          const char* newName = doc["name"];
-          strncpy(deviceName, newName, MAX_DEVICE_NAME_LENGTH - 1);
-          deviceName[MAX_DEVICE_NAME_LENGTH - 1] = 0;
-          saveDeviceName();
-        }
-
-        if (doc.containsKey("transmitterID")) {
-          uint16_t newID = doc["transmitterID"];
-          transmitterID = newID;
-        }
-
-        if (doc.containsKey("powerSaveMode")) {
-          bool newPowerMode = doc["powerSaveMode"];
-          powerSaveMode = newPowerMode;
-        }
-
-        // Save transmitter config
-        saveTransmitterConfig();
-
-        StaticJsonDocument<128> response;
-        response["success"] = true;
-        response["name"] = deviceName;
-        response["transmitterID"] = transmitterID;
-        response["powerSaveMode"] = powerSaveMode;
-        String output;
-        serializeJson(response, output);
-        request->send(200, "application/json", output);
-      } else {
-        request->send(400, "application/json", "{\"error\":\"Invalid request\"}");
+    if (!error) {
+      if (doc.containsKey("name")) {
+        const char* newName = doc["name"];
+        strncpy(deviceName, newName, MAX_DEVICE_NAME_LENGTH - 1);
+        deviceName[MAX_DEVICE_NAME_LENGTH - 1] = 0;
+        saveDeviceName();
       }
-    });
 
-  // API: Get sensor data
-  server.on("/api/data", HTTP_GET, [](AsyncWebServerRequest *request){
-    StaticJsonDocument<512> doc;
-    doc["valid"] = latestData.valid;
-    doc["count"] = activeSensorCount;
-    doc["timestamp"] = latestData.timestamp;
+      if (doc.containsKey("transmitterID")) {
+        uint16_t newID = doc["transmitterID"];
+        transmitterID = newID;
+      }
 
-    JsonArray temps = doc.createNestedArray("temps");
-    for (int i = 0; i < activeSensorCount; i++) {
-      temps.add(latestData.temps[i]);
+      if (doc.containsKey("powerSaveMode")) {
+        bool newPowerMode = doc["powerSaveMode"];
+        powerSaveMode = newPowerMode;
+      }
+
+      // Save transmitter config
+      saveTransmitterConfig();
+
+      StaticJsonDocument<128> response;
+      response["success"] = true;
+      response["name"] = deviceName;
+      response["transmitterID"] = transmitterID;
+      response["powerSaveMode"] = powerSaveMode;
+      String output;
+      serializeJson(response, output);
+      server.send(200, "application/json", output);
+    } else {
+      server.send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
     }
+  } else {
+    server.send(400, "application/json", "{\"error\":\"No body\"}");
+  }
+}
 
-    String response;
-    serializeJson(doc, response);
-    request->send(200, "application/json", response);
-  });
+/**
+ * Handle GET /api/data
+ */
+void handleApiData() {
+  StaticJsonDocument<512> doc;
+  doc["valid"] = latestData.valid;
+  doc["count"] = activeSensorCount;
+  doc["timestamp"] = latestData.timestamp;
 
-  // API: Get LoRa status
-  server.on("/api/lora", HTTP_GET, [](AsyncWebServerRequest *request){
-    StaticJsonDocument<256> doc;
-    doc["totalPackets"] = loraStats.totalPackets;
-    doc["lastPacketTime"] = loraStats.lastPacketTime;
-    doc["frequency"] = "433 MHz";
-    doc["txPower"] = "20 dBm";
-    doc["spreadingFactor"] = "SF7";
-    doc["bandwidth"] = "125 kHz";
-    String response;
-    serializeJson(doc, response);
-    request->send(200, "application/json", response);
-  });
+  JsonArray temps = doc.createNestedArray("temps");
+  for (int i = 0; i < activeSensorCount; i++) {
+    temps.add(latestData.temps[i]);
+  }
 
-  // API: Get serial logs
-  server.on("/api/serial", HTTP_GET, [](AsyncWebServerRequest *request){
-    String logs = getSerialLogs();
-    request->send(200, "application/json", logs);
-  });
+  String response;
+  serializeJson(doc, response);
+  server.send(200, "application/json", response);
+}
+
+/**
+ * Handle GET /api/lora
+ */
+void handleApiLora() {
+  StaticJsonDocument<256> doc;
+  doc["totalPackets"] = loraStats.totalPackets;
+  doc["lastPacketTime"] = loraStats.lastPacketTime;
+  doc["frequency"] = "433 MHz";
+  doc["txPower"] = "20 dBm";
+  doc["spreadingFactor"] = "SF7";
+  doc["bandwidth"] = "125 kHz";
+  String response;
+  serializeJson(doc, response);
+  server.send(200, "application/json", response);
+}
+
+/**
+ * Handle GET /api/serial
+ */
+void handleApiSerial() {
+  String logs = getSerialLogs();
+  server.send(200, "application/json", logs);
+}
+
+/**
+ * Setup Web Server with all endpoints
+ * UI STYLE MATCHES RX WEBSERVER (dark theme #0b1220)
+ */
+void setupWebServer() {
+  Serial.println("Setting up web server...");
+
+  // Route handlers
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/api/config", HTTP_GET, handleApiConfigGet);
+  server.on("/api/config", HTTP_POST, handleApiConfigPost);
+  server.on("/api/data", HTTP_GET, handleApiData);
+  server.on("/api/lora", HTTP_GET, handleApiLora);
+  server.on("/api/serial", HTTP_GET, handleApiSerial);
 
   server.begin();
   Serial.println("Web server started on http://" + WiFi.softAPIP().toString());
