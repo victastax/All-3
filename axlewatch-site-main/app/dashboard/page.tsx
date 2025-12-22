@@ -15,11 +15,16 @@ import Link from "next/link";
 
 interface Trailer {
   id: number;
+  name?: string; // e.g., "TRAILER1", "DOLLY1"
   online: boolean;
   rssi: number;
   lastUpdate: number;
   ambientTemp: number;
   hubTemperatures: number[];
+  alert?: {
+    level: "warning" | "critical";
+    message: string;
+  } | null;
 }
 
 interface DataPoint {
@@ -54,8 +59,8 @@ export default function DashboardPage() {
     }
 
     loadReceivers();
-    // Refresh data every 30 seconds
-    const interval = setInterval(loadReceivers, 30000);
+    // Refresh data every 5 seconds for a more "live" feel
+    const interval = setInterval(loadReceivers, 5000);
     return () => clearInterval(interval);
   }, [router]);
 
@@ -347,10 +352,13 @@ export default function DashboardPage() {
             ) : (
               <div className="space-y-6">
                 {selectedReceiver.latestData.trailers.map((trailer) => (
-                  <div key={trailer.id} className="border rounded-lg p-4">
+                  <div key={trailer.id} className={`border rounded-lg p-4 ${
+                    trailer.alert?.level === "critical" ? "border-red-500 bg-red-50" :
+                    trailer.alert?.level === "warning" ? "border-amber-500 bg-amber-50" : ""
+                  }`}>
                     <div className="flex items-center justify-between mb-4">
                       <h3 className="font-semibold">
-                        Trailer #{trailer.id}
+                        {trailer.name || `Trailer #${trailer.id}`}
                         <span
                           className={`ml-2 text-xs ${
                             trailer.online ? "text-green-600" : "text-red-600"
@@ -358,6 +366,13 @@ export default function DashboardPage() {
                         >
                           {trailer.online ? "● Online" : "● Offline"}
                         </span>
+                        {trailer.alert && (
+                          <span className={`ml-2 text-xs ${
+                            trailer.alert.level === "critical" ? "text-red-600" : "text-amber-600"
+                          }`}>
+                            ⚠ {trailer.alert.level.toUpperCase()}
+                          </span>
+                        )}
                       </h3>
                       <div className="text-sm text-neutral-600">
                         Ambient: {trailer.ambientTemp}°C
