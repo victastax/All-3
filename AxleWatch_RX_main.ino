@@ -1205,6 +1205,7 @@ public:
       readings["hub_6"] = transmitters[i].temps[5];
       readings["hub_7"] = transmitters[i].temps[6];
       readings["hub_8"] = transmitters[i].temps[7];
+      readings["ambient_temp"] = transmitters[i].ambientTemp;
 
       // Location data (from GPS)
       JsonObject location = doc.createNestedObject("location");
