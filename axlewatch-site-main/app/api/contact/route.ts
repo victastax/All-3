@@ -25,9 +25,8 @@ export async function POST(req: Request) {
       return Response.json({ error: "Missing required fields." }, { status: 400 });
     }
 
-    // TEMP: use Resend's onboarding sender to isolate auth problems from domain/DKIM
-    const from = "AxleWatch <onboarding@resend.dev>";
-    // After it works, change to: "AxleWatch Website <info@axlewatch.com>"
+    // Send from verified domain
+    const from = "AxleWatch <info@axlewatch.com>";
 
     // In Resend sandbox mode, you can only send to your verified email.
     // Set RESEND_TO_EMAIL env var to change recipient (default: nickbould@gmail.com)
